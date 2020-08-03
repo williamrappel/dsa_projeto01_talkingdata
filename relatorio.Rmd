@@ -1,0 +1,584 @@
+---
+title: "Projeto com Feedback 1"
+author: "William Rappel"
+date: "30/07/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(knitr)
+library(kableExtra)
+options(knitr.kable.NA = '')
+```
+
+
+# Detecção de Fraudes no Tráfego de Cliques em Propagandas de Aplicações Mobile
+
+
+## Apresentação
+
+Meu nome é William Edward Rappel de Amorim, sou estudante de Estatística da Universidade de Brasília (UnB), com provável conclusão no segundo semestre letivo de 2020. Estou cursando a Formação Cientista de Dados da Data Science Academy, que possui como primeiro curso da formação o de Big Data Analytics com R e Microsoft Azure Machine Learning. Um dos projetos desse curso é o de detecção de fraudes no tráfego de cliques em propagandas de aplicações Mobile, que será o objeto de estudo deste projeto.
+
+
+## Descrição do projeto
+
+O risco de fraude está em toda parte, mas para as empresas que anunciam online, a fraude de cliques pode acontecer em um volume avassalador, resultando em dados de cliques enganosos e dinheiro desperdiçado. Os canais de anúncios podem aumentar os custos simplesmente quando pessoas ou bots clicam nos anúncios em grande escala, o que na prática não gera o resultado esperado. Com mais de 1 bilhão de dispositivos móveis em uso todos os meses, a China é o maior mercado móvel do mundo e, portanto, sofre com grandes
+volumes de tráfego fraudulento.
+
+A TalkingData (https://www.talkingdata.com), a maior plataforma de Big Data independente da China, cobre mais de 70% dos dispositivos móveis ativos em todo o país. Eles lidam com 3 bilhões de cliques por dia, dos quais 90% são potencialmente fraudulentos. Sua abordagem atual para impedir fraudes de cliques para desenvolvedores de aplicativos é medir a jornada do clique de um usuário em todo o portfólio e sinalizar endereços IP que produzem muitos cliques, mas nunca acabam instalando aplicativos. Com essas informações, eles criaram
+uma lista negra de IPs e uma lista negra de dispositivos.
+
+Embora bem-sucedidos, eles querem estar sempre um passo à frente dos fraudadores e propuseram uma competição no Kaggle para desenvolver ainda mais a solução. Os competidores foram desafiados a criar um algoritmo que possa prever se um usuário fará o download de um aplicativo depois de clicar em um anúncio de aplicativo para dispositivos móveis. Resumindo, neste projeto, será construído um modelo de
+aprendizado de máquina para determinar se um clique é fraudulento ou não.
+
+Mais informações sobre o projeto e fontes de dados em: https://www.kaggle.com/c/talkingdata-adtracking-fraud-detection/data
+
+## Leitura do Banco de Dados
+
+Primeiramente, foi realizada a leitura do banco de dados de treinamento, que possui mais de 7 gb e está no formato .csv.  Para isso, definiu-se o diretório de trabalho onde se encontram os arquivos do projeto. Além disso, carregou-se os pacotes data.table, dplyr e lubridate, que serão utilizados na leitura e manipulação do banco de dados.
+
+```{r}
+# Diretório de trabalho
+setwd("C:/FCD/BigDataRAzure/Cap20/Projeto01")
+getwd()
+
+# Pacotes de manipulação
+library(data.table)
+library(dplyr)
+library(lubridate)
+
+# Leitura do banco de dados completo
+system.time(df <- fread("train.csv"))
+```
+
+Em seguida, estudou-se a estrutura do banco de dados e a tabela de frequências da variável target: *is_attributed*.
+
+```{r}
+# Estrutura
+str(df)
+head(df)
+
+# Variável resposta
+(tab <- table(df$is_attributed))
+prop.table(tab)
+```
+
+Com isso, concluiu-se que o banco de dados estava muito desbalanceado, o que impactaria na estimação dos modelos de aprendizado de máquina.
+
+
+## Rebalanceamento
+
+Como forma de rebalancear e diminuir o tamanho do banco de dados para um que permitisse a execução dos modelos em uma máquina de 8 gb de memória RAM, utilizou-se a seguinte estratégia: dentre as 184.447.044 observações da classe 0, foram amostradas aleatoriamente 456.846 observações; já as observações da classe 1 foram todas mantidas (456.846), de forma que o banco de dados possuísse quantidades iguais de cada classe.
+
+```{r}
+# Rebalanceamento
+set.seed(100)
+ind_zero <- which(df$is_attributed == 0)
+ind_zero_novo <- sample(ind_zero, tab[2])
+df2 <- df[c(ind_zero_novo, which(df$is_attributed == 1)),]
+rm(df, ind_zero, ind_zero_novo)
+```
+
+Em seguida, estudou-se a estrutura desse novo banco de dados, agora devidamente balanceado e nomeado de *df2*.
+
+```{r}
+# Novo banco de dados
+str(df2)
+head(df2)
+table(df2$is_attributed)
+sapply(df2, function(x) length(unique(x)))
+```
+
+É importante ressaltar que o último comando permite concluir que as variáveis: *app*, *device*, *os* e *channel* possuem muitos níveis diferentes, o que irá impactar no tempo de execução dos modelos.
+
+
+## Reorganizando as variáveis
+
+Em seguida, excluiu-se as colunas *ip* e *attributed_time*, pois não seriam úteis para a predição de *is_attributed*.
+
+```{r}
+# Removendo variáveis
+df2 <- df2 %>%
+  select(-ip, -attributed_time)
+
+# Código para salvar e carregar o banco de dados modificado, respectivamente
+# saveRDS(df2, file = "df2.rds")
+# df2 <- readRDS("df2.rds")
+```
+
+Agora, com o intuito de diminuir a quantidade de níveis das variáveis *app*, *device*, *os* e *channel*, utilizou-se a seguinte abordagem: para a 1ª, 3ª e 4ª, todas as categorias com frequência menor que 10.000 foram agrupadas em uma só categoria, nomeada como 999. Já para *device*, utilizou-se a mesma estratégia, porém com frequência de 1.000. A partir desse estratégia, criou-se 4 novas variáveis, que foram adicionadas ao banco de dados.
+
+```{r}
+# Reorganizando variáveis
+# app
+tab_app <- sort(table(df2$app), decreasing = T)
+app_mant <- as.numeric(names(tab_app)[tab_app >= 10000])
+app_mod <- ifelse(df2$app %in% app_mant, df2$app, 999)
+table(app_mod)
+df2$app_mod <- app_mod
+# app_mant: 1, 2, 3, 5, 8, 9, 10, 11, 12, 13, 14, 15, 18, 19, 29, 35, 45, 72
+
+# device
+tab_dev <- sort(table(df2$device), decreasing = T)
+dev_mant <- as.numeric(names(tab_dev)[tab_dev >= 1000])
+dev_mod <- ifelse(df2$device %in% dev_mant, df2$dev, 999)
+table(dev_mod)
+df2$device_mod <- dev_mod
+# dev_mant: 0, 1, 2, 6, 16, 18, 21, 33, 40, 3032
+
+# os
+tab_os <- sort(table(df2$os), decreasing = T)
+os_mant <- as.numeric(names(tab_os)[tab_os >= 10000])
+os_mod <- ifelse(df2$os %in% os_mant, df2$os, 999)
+table(os_mod)
+df2$os_mod <- os_mod
+# os_mant: 0, 6, 8, 9, 10, 13, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 27, 29, 32, 37, 38
+
+# channel
+tab_cha <- sort(table(df2$channel), decreasing = T)
+cha_mant <- as.numeric(names(tab_cha))[tab_cha >= 10000]
+cha_mod <- ifelse(df2$channel %in% cha_mant, df2$channel, 999)
+table(cha_mod)
+df2$channel_mod <- cha_mod
+# cha_mant: 21, 101, 107, 113, 121, 134, 145, 153, 178, 205, 213, 245, 259, 265, 274, 280, 343, 347, 442, 477
+```
+
+Em relação a variável *clicktime*, 2 novas variáveis foram criadas: uma contendo apenas o dia da semana e outra apenas a hora do click. Essas variáveis foram mantidas como numéricas.
+
+```{r}
+df2$click_time <- ymd_hms(df2$click_time)
+df2 <- df2 %>%
+  mutate(weekday = as.factor(weekdays(click_time)), hour = hour(click_time))
+str(df2)
+df2$weekday <- as.numeric(ordered(df2$weekday, levels = c("segunda-feira",
+                                                          "terça-feira",
+                                                          "quarta-feira",
+                                                          "quinta-feira")))
+```
+
+Em seguida, criou-se o banco de dados final, contendo apenas a variável resposta e as 6 variáveis criadas acima.
+
+```{r}
+final <- df2 %>%
+  select(app_mod, device_mod, os_mod, channel_mod, weekday, hour, is_attributed) %>%
+  mutate_at(c("app_mod", "device_mod", "os_mod", "channel_mod"), as.factor)
+str(final)
+
+# Código para salvar e carregar o banco de dados modificado, respectivamente
+# saveRDS(final, file = "final.rds")
+# final <- readRDS("final.rds")
+```
+
+
+## Divisão do Banco de Dados
+
+O banco de dados foi dividido em 2: um para treinamento e outro para teste. A proporção utilizada foi de 70% para treinamento e 30% para teste.
+
+```{r}
+# Treino e Validação
+set.seed(200)
+treino <- sample(1:nrow(final), ceiling(0.7*nrow(final)))
+df_treino <- final[treino,]
+df_teste <- final[-treino,]
+```
+
+Em seguida, estudou-se a estrutura dos novos bancos, assim como a distribuição da variável target em cada um e a quantidade de níveis das variáveis explicativas.
+
+```{r}
+str(df_treino)
+str(df_teste)
+prop.table(table(df_treino$is_attributed))
+prop.table(table(df_teste$is_attributed))
+sapply(final, function(x) length(unique(x)))
+sapply(df_treino, function(x) length(unique(x)))
+sapply(df_teste, function(x) length(unique(x)))
+rm(list=ls()[!(ls() %in% c('df_treino','df_teste'))])
+# Código para salvar e carregar os bancos de dados de treinamento e teste, respectivamente
+# saveRDS(df_treino, file = "df_treino.rds")
+# df_treino <- readRDS("df_treino.rds")
+# saveRDS(df_teste, file = "df_teste.rds")
+# df_teste <- readRDS("df_teste.rds")
+```
+
+Com isso, concluiu-se que os bancos de dados apresentavam propriedades semelhantes.
+
+
+## Análise Exploratória
+
+
+### Valores Faltantes (NAs)
+
+Primeiro, verificou-se que nenhuma das variáveis apresentavam valores faltantes, tanto no banco de dados de treinamento como no de teste.
+
+```{r}
+# Análise Exploratória
+# NA
+sapply(df_treino, function(x) sum(is.na(x)))
+sapply(df_teste, function(x) sum(is.na(x)))
+```
+
+
+### Individual
+
+Em seguida, realizou-se uma análise exploratória individual das variáveis, com o objetivo de estudar o comportamento de cada atributo do banco de dados de treinamento, por meio de gráficos.
+
+```{r, fig.hold='hold', out.width='33%', out.height='50%', echo=FALSE}
+library(tigerstats)
+library(ggplot2)
+# Individual
+# app_mod
+# rowPerc(xtabs(~ app_mod, data = df_treino))
+ggplot(df_treino, aes(x = app_mod)) +
+  geom_bar(aes(y = prop.table(..count..) * 100), fill = "#A11D21") + 
+  labs(x="App (modificado)", y="Porcentagem") +
+  scale_y_continuous(breaks = 0:15, labels = paste0(0:15, '%'))
+# device_mod
+# rowPerc(xtabs(~ device_mod, data = df_treino))
+ggplot(df_treino, aes(x = device_mod)) +
+  geom_bar(aes(y = prop.table(..count..) * 100), fill = "#A11D21") + 
+  labs(x="Device (modificado)", y="Porcentagem") +
+  scale_y_continuous(breaks = seq(0,100,10), labels = paste0(seq(0,100,10), '%'), limits = c(0,100))
+# os_mod
+# rowPerc(xtabs(~ os_mod, data = df_treino))
+ggplot(df_treino, aes(x = os_mod)) +
+  geom_bar(aes(y = prop.table(..count..) * 100), fill = "#A11D21") + 
+  labs(x="OS (modificado)", y="Porcentagem") +
+  scale_y_continuous(breaks = 0:25, labels = paste0(0:25, '%'), limits = c(0,25))
+# channel_mod
+# rowPerc(xtabs(~ channel_mod, data = df_treino))
+ggplot(df_treino, aes(x = channel_mod)) +
+  geom_bar(aes(y = prop.table(..count..) * 100), fill = "#A11D21") + 
+  labs(x="Channel (modificado)", y="Porcentagem") +
+  scale_y_continuous(breaks = seq(0,40,5), labels = paste0(seq(0,40,5), '%'), limits = c(0,40))
+# weekday
+# rowPerc(xtabs(~ weekday, data = df_treino))
+ggplot(df_treino, aes(x = as.factor(weekday))) +
+  geom_bar(aes(y = prop.table(..count..) * 100), fill = "#A11D21", width = .5) + 
+  labs(x="Weekday", y="Porcentagem") +
+  scale_y_continuous(breaks = seq(0,35,5), labels = paste0(seq(0,35,5), '%'), limits = c(0,35)) +
+  scale_x_discrete(labels = c("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira"))
+# hour
+# rowPerc(xtabs(~ hour, data = df_treino))
+ggplot(df_treino, aes(x=hour)) + geom_histogram(aes(y = 100 * (..count..)/sum(..count..)), 
+                                                colour="white", fill="#A11D21", binwidth=1, center = .5)+
+  labs(x="Hour", y="Porcentagem") + 
+  scale_y_continuous(breaks = 0:11, labels = paste0(0:11, '%'), limits = c(0,11))
+```
+
+```{r, echo=FALSE}
+# is_attributed
+# rowPerc(xtabs(~ is_attributed, data = df_treino))
+ggplot(df_treino, aes(x = as.factor(is_attributed))) +
+  geom_bar(aes(y = prop.table(..count..) * 100), fill = "#A11D21", width = .3) + 
+  labs(x="Is_attributed", y="Porcentagem") +
+  scale_y_continuous(breaks = seq(0,50,10), labels = paste0(seq(0,50,10), '%'), limits = c(0,55))
+```
+
+
+### Bivariada
+
+Por último, realizou-se uma análise bivariada envolvendo a variável target *is_attributed* em função de cada uma das variáveis explicativas. Para isso, elaborou-se gráficos ilustrando a distribuição da variável target para cada valor das variáveis explicativas, no banco de dados de treinamento.
+
+```{r, fig.hold='hold', out.width='33%', out.height='50%', echo=FALSE}
+# Bivariada
+library(scales)
+# app_mod
+# rowPerc(xtabs(~ app_mod + is_attributed, data = df_treino))
+tab <- as.data.frame(prop.table(table(df_treino$app_mod,df_treino$is_attributed),1))
+ggplot(tab, aes(x=Var1, y=Freq, fill=Var2)) + geom_bar(stat = "identity", position="fill") +
+  scale_fill_manual(values=c("#A11D21", "#003366"), name = "Is_attributed")+
+  labs(x="App (modificado)", y="Porcentagem") +
+  theme(legend.position="top") +
+  scale_y_continuous(labels = scales::percent)
+# device_mod
+# rowPerc(xtabs(~ device_mod + is_attributed, data = df_treino))
+tab <- as.data.frame(prop.table(table(df_treino$device_mod,df_treino$is_attributed),1))
+ggplot(tab, aes(x=Var1, y=Freq, fill=Var2)) + geom_bar(stat = "identity", position="fill") +
+  scale_fill_manual(values=c("#A11D21", "#003366"), name = "Is_attributed")+
+  labs(x="Device (modificado)", y="Porcentagem") +
+  theme(legend.position="top") +
+  scale_y_continuous(labels = scales::percent)
+# os_mod
+# rowPerc(xtabs(~ os_mod + is_attributed, data = df_treino))
+tab <- as.data.frame(prop.table(table(df_treino$os_mod,df_treino$is_attributed),1))
+ggplot(tab, aes(x=Var1, y=Freq, fill=Var2)) + geom_bar(stat = "identity", position="fill") +
+  scale_fill_manual(values=c("#A11D21", "#003366"), name = "Is_attributed")+
+  labs(x="OS (modificado)", y="Porcentagem") +
+  theme(legend.position="top") +
+  scale_y_continuous(labels = scales::percent)
+# channel_mod
+# rowPerc(xtabs(~ channel_mod + is_attributed, data = df_treino))
+tab <- as.data.frame(prop.table(table(df_treino$channel_mod,df_treino$is_attributed),1))
+ggplot(tab, aes(x=Var1, y=Freq, fill=Var2)) + geom_bar(stat = "identity", position="fill") +
+  scale_fill_manual(values=c("#A11D21", "#003366"), name = "Is_attributed")+
+  labs(x="Channel (modificado)", y="Porcentagem") +
+  theme(legend.position="top") +
+  scale_y_continuous(labels = scales::percent)
+# weekday
+# rowPerc(xtabs(~ weekday + is_attributed, data = df_treino))
+tab <- as.data.frame(prop.table(table(df_treino$weekday,df_treino$is_attributed),1))
+ggplot(tab, aes(x=Var1, y=Freq, fill=Var2)) + geom_bar(stat = "identity", position="fill", width = .5) +
+  scale_fill_manual(values=c("#A11D21", "#003366"), name = "Is_attributed")+
+  labs(x="Weekday", y="Porcentagem") +
+  theme(legend.position="top") +
+  scale_y_continuous(labels = scales::percent)
+# hour
+# rowPerc(xtabs(~ hour + is_attributed, data = df_treino))
+tab <- as.data.frame(prop.table(table(df_treino$hour,df_treino$is_attributed),1))
+ggplot(tab, aes(x=Var1, y=Freq, fill=Var2)) + geom_bar(stat = "identity", position="fill", width = .5) +
+  scale_fill_manual(values=c("#A11D21", "#003366"), name = "Is_attributed")+
+  labs(x="Hour", y="Porcentagem") +
+  theme(legend.position="top") +
+  scale_y_continuous(labels = scales::percent)
+# Correlation
+# cor(df_treino[,c("is_attributed", "weekday", "hour")])
+```
+
+## Estimação dos Modelos
+
+Primeiro, carregou-se todos os pacotes que seriam utilizados. Além disso, carregou-se o script *plot_utils.R*, que fornecia algumas funções para construção de gráficos da curva ROC. Conforme descrito no site da competição, o critério de classificação seria a área abaixo da curva ROC entre a probabilidade predita e o valor observado. Por isso, esse será o critério principal utilizado para escolher o melhor modelo.
+
+```{r}
+library(caret)
+library(ROCR)
+library(pROC)
+library(randomForest)
+library(class)
+library(gbm)
+source("plot_utils.R")
+```
+
+Devido ao tempo de execução muito elevado para estimação de alguns dos modelos, será apenas apresentado o código utilizado na primeira execução, porém os modelos já foram calculados e serão apenas carregados no script, por meio do formato RDS.
+
+
+### Regressão Logística
+
+```{r, eval=FALSE}
+# Regressão Logística
+# Completo
+reg.log <- glm(is_attributed ~ app_mod + device_mod + os_mod + channel_mod + weekday + hour,
+               data = df_treino, family = binomial(link = logit))
+saveRDS(reg.log, "reg.log.rds")
+```
+
+```{r}
+reg.log <- readRDS("reg.log.rds")
+```
+
+```{r}
+reg.log.probs <- predict(reg.log, newdata = df_teste, type = "response")
+reg.log.preds <- round(reg.log.probs)
+confusionMatrix(table(observado = df_teste$is_attributed, predito = reg.log.preds), positive = "1")
+predictions <- prediction(reg.log.probs, df_teste$is_attributed)
+plot.roc.curve(predictions, title.text = "Curva ROC")
+auc(roc(df_teste$is_attributed, reg.log.probs))
+```
+
+Esse modelo obteve AUC de 0.9446.
+
+
+### Random Forest
+
+Para este método, foi necessário selecionar uma amostra de apenas 100.000 observações para o treinamento, pois se não o computador travava e o R era finalizado.
+
+```{r, eval=FALSE}
+set.seed(300)
+rf.mod <- randomForest(as.factor(is_attributed) ~ ., data = df_treino, importance = TRUE, 
+                       subset = sample(1:nrow(df_treino), 100000))
+saveRDS(rf.mod, "rf.mod.rds")
+```
+
+```{r}
+rf.mod <- readRDS("rf.mod.rds")
+```
+
+```{r}
+rf.mod
+varImpPlot(rf.mod)
+rf.probs <- predict(rf.mod, newdata = df_teste, type = "prob")[,2]
+rf.preds <- predict(rf.mod, newdata = df_teste, type = "response")
+confusionMatrix(table(observado = df_teste$is_attributed, predito = rf.preds), positive = "1")
+predictions <- prediction(rf.probs, df_teste$is_attributed)
+plot.roc.curve(predictions, title.text = "Curva ROC")
+auc(roc(df_teste$is_attributed, rf.probs))
+```
+
+Esse modelo obteve AUC de 0.9398.
+
+
+### KNN
+
+Para este método, também foi necessário selecionar uma amostra de apenas 100.000 observações.
+
+```{r, eval=FALSE}
+set.seed(400)
+ind <- sample(1:nrow(df_treino), 100000)
+knn.preds <- knn(train = df_treino[ind,-c('is_attributed')], 
+                 test = df_teste[,-c('is_attributed')],
+                 cl = as.factor(df_treino$is_attributed[ind]), k = 50, prob = TRUE)
+saveRDS(knn.preds, "knn.preds.rds")
+```
+
+```{r}
+knn.preds <- readRDS("knn.preds.rds")
+```
+
+```{r}
+knn.probs <- ifelse(knn.preds == 1, attributes(knn.preds)$prob, 1-attributes(knn.preds)$prob)
+confusionMatrix(table(observado = df_teste$is_attributed, predito = knn.preds), positive = "1")
+predictions <- prediction(knn.probs, df_teste$is_attributed)
+plot.roc.curve(predictions, title.text = "Curva ROC")
+auc(roc(df_teste$is_attributed, knn.probs))
+```
+
+Esse modelo obteve AUC de 0.945.
+
+
+### Bagging
+
+Este método foi composto de *bagging* de árvores de decisão, sendo muito similar ao Random Forest, porém com o parâmetro *m* igual ao número de variáveis explicativas (nesse caso, 6). Também selecionou-se uma amostra de 100.000 observações.
+
+```{r, eval=FALSE}
+set.seed(500)
+bag.mod <- randomForest(as.factor(is_attributed) ~ ., data = df_treino, importance = TRUE, 
+                        subset = sample(1:nrow(df_treino), 100000), mtry = 6)
+saveRDS(bag.mod, "bag.mod.rds")
+```
+
+```{r}
+bag.mod <- readRDS("bag.mod.rds")
+```
+
+```{r}
+bag.mod
+varImpPlot(bag.mod)
+bag.probs <- predict(bag.mod, newdata = df_teste, type = "prob")[,2]
+bag.preds <- predict(bag.mod, newdata = df_teste, type = "response")
+confusionMatrix(table(observado = df_teste$is_attributed, predito = bag.preds), positive = "1")
+predictions <- prediction(bag.probs, df_teste$is_attributed)
+plot.roc.curve(predictions, title.text = "Curva ROC")
+auc(roc(df_teste$is_attributed, bag.probs))
+```
+
+Esse modelo obteve AUC de 0.9343.
+
+
+### Boosting
+
+```{r, eval=FALSE}
+set.seed(600)
+boost.mod <- gbm(is_attributed ~ ., data = df_treino, 
+                 distribution = "bernoulli", n.trees = 100)
+saveRDS(boost.mod, "boost.mod.rds")
+```
+
+```{r}
+boost.mod <- readRDS("boost.mod.rds")
+```
+
+```{r}
+boost.mod
+summary(boost.mod)
+boost.probs <- predict(boost.mod, newdata = df_teste, n.trees = 100, type = "response")
+boost.preds <- round(boost.probs)
+confusionMatrix(table(observado = df_teste$is_attributed, predito = boost.preds), positive = "1")
+predictions <- prediction(boost.probs, df_teste$is_attributed)
+plot.roc.curve(predictions, title.text = "Curva ROC")
+auc(roc(df_teste$is_attributed, boost.probs))
+```
+
+Esse modelo obteve AUC de 0.9416.
+
+Com isso, obteve-se a seguinte classificação de modelos mediante a AUC:
+
+1. KNN: 0.945;
+2. Regressão Logística: 0.9446;
+3. Boosting: 0.9416;
+4. Random Forest: 0.9398;
+5. Bagging: 0.9343.
+
+
+## Avaliação na Competição Kaggle e Otimização
+
+Em seguida, os cinco modelos acima foram utilizados para fazer as previsões para os dados de teste presentes no site da competição no Kaggle e enviados para avaliação, obtendo os seguintes resultados:
+
+```{r}
+tabela <- data.frame(Modelo = c("Regressão Logística", "KNN", "Boosting", "Random Forest", "Bagging"),
+                     `Private Score` = c(0.93269, 0.93104, 0.92852, 0.92194, 0.91783),
+                     `Public Score` = c(0.93678, 0.92906, 0.93124, 0.92398, 0.90934))
+tabela %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Com isso, conclui-se que o modelo com melhor desempenho foi o de regressão logística. Por isso, ele será o modelo otimizado. A partir dele, foram criados mais dois modelos: um contendo as mesmas variáveis explicativas, porém retirando *weekday* e o outro foi obtido retirando *weekday* e tratando *hour* como um fator.
+
+```{r, eval=FALSE}
+# Otimização Regressão Logística
+# Sem weekday
+reg.log2 <- glm(is_attributed ~ app_mod + device_mod + os_mod + channel_mod + hour,
+                data = df_treino, family = binomial(link = logit))
+saveRDS(reg.log2, "reg.log2.rds")
+```
+
+```{r}
+reg.log2 <- readRDS("reg.log2.rds")
+```
+
+```{r}
+reg.log2.probs <- predict(reg.log2, newdata = df_teste, type = "response")
+reg.log2.preds <- round(reg.log2.probs)
+confusionMatrix(table(observado = df_teste$is_attributed, predito = reg.log2.preds), positive = "1")
+predictions <- prediction(reg.log2.probs, df_teste$is_attributed)
+plot.roc.curve(predictions, title.text = "Curva ROC")
+auc(roc(df_teste$is_attributed, reg.log2.probs))
+```
+
+Esse modelo obteve AUC de 0.9444.
+
+```{r, eval=FALSE}
+# Sem weekday e hour como fator
+reg.log3 <- glm(is_attributed ~ app_mod + device_mod + os_mod + channel_mod + as.factor(hour),
+                data = df_treino, family = binomial(link = logit))
+saveRDS(reg.log3, "reg.log3.rds")
+```
+
+```{r}
+reg.log3 <- readRDS("reg.log3.rds")
+```
+
+```{r}
+reg.log3.probs <- predict(reg.log3, newdata = df_teste, type = "response")
+reg.log3.preds <- round(reg.log3.probs)
+confusionMatrix(table(observado = df_teste$is_attributed, predito = reg.log3.preds), positive = "1")
+predictions <- prediction(reg.log3.probs, df_teste$is_attributed)
+plot.roc.curve(predictions, title.text = "Curva ROC")
+auc(roc(df_teste$is_attributed, reg.log3.probs))
+```
+
+Esse modelo obteve AUC de 0.9459.
+
+Com isso, obteve-se a seguinte classificação de modelos mediante a AUC:
+
+1. Regressão Logística 3: 0.9459;
+2. KNN: 0.945;
+3. Regressão Logística: 0.9446;
+4. Regressão Logística 2: 0.9444;
+5. Boosting: 0.9416;
+6. Random Forest: 0.9398;
+7. Bagging: 0.9343.
+
+Esses dois modelos também foram enviados para avaliação no Kaggle, obtendo os seguintes resultados finais.
+
+```{r}
+tabela <- data.frame(Modelo = c("Regressão Logística 3", "Regressão Logística", "Regressão Logística 2", "KNN", "Boosting", "Random Forest", "Bagging"),
+                     `Private Score` = c(0.93295, 0.93269, 0.93257, 0.93104, 0.92852, 0.92194, 0.91783),
+                     `Public Score` = c(0.93678, 0.93678, 0.93687, 0.92906, 0.93124, 0.92398, 0.90934))
+tabela %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+
+## Conclusão
+
+Com essas informações, conclui-se que o melhor modelo para o objetivo proposto é o modelo de regressão logística sem a variável *weekday* e com *hour* tratada como fator. Esse modelo levou ao melhor valor do critério de seleção (AUC) tanto no banco de dados de teste elaborado no projeto, como na avaliação oficial da competição no site Kaggle. Por isso, ele deve ser o modelo utilizado para realizar as previsões tratadas no objetivo do projeto, pois é o modelo mais preciso.
